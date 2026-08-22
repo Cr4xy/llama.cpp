@@ -461,8 +461,8 @@ def test_router_dedup_cache_models():
         os.remove(preset_path)
 
 
-def test_router_no_cache_models():
-    """no-cache-models skips scanning the cache"""
+def test_router_hide_cache_models():
+    """hide-cache-models hides cached models from GET /models"""
     global server
 
     server.start()
@@ -472,18 +472,83 @@ def test_router_no_cache_models():
 
     server.stop()
 
-    preset_path = os.path.join(TMP_DIR, "test_nocache.ini")
+    preset_path = os.path.join(TMP_DIR, "test_hidecached.ini")
     with open(preset_path, "w") as f:
         f.write(
             "[*]\n"
-            "no-cache-models = 1\n"
+            "hide-cache-models = 1\n"
         )
 
     try:
         server.models_preset = preset_path
         server.start()
         ids = _get_model_ids(is_reload=True)
-        assert MODEL_B not in ids
+        print(ids)
+        assert len(ids) == 0
+
+        # Ensure the model is not present before we start
+        server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+        # Chat completions with non-downloaded model should fail
+        res = server.make_request(
+            "POST",
+            "/v1/chat/completions",
+            data={
+                "model": MODEL_DOWNLOAD_ID,
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 4,
+            },
+        )
+        assert res.status_code != 200
+
+        sse_events: list = []
+        stop = threading.Event()
+        sse_ready = threading.Event()
+        sse_thread = threading.Thread(
+            target=_listen_sse, args=(server, sse_events, stop, sse_ready), daemon=True
+        )
+        sse_thread.start()
+
+        # wait for the SSE client to be subscribed before triggering the download,
+        # otherwise the one-shot download_finished event can be broadcast before
+        # this client is registered and be lost
+        assert sse_ready.wait(10), "SSE client failed to connect"
+
+        # Trigger the download
+        res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+        assert res.status_code == 200
+        assert res.body.get("success") is True
+
+        # Wait for download_finished SSE event
+        finished = _wait_for_sse_event(
+            sse_events, "download_finished", MODEL_DOWNLOAD_ID, MODEL_DOWNLOAD_TIMEOUT
+        )
+        stop.set()
+
+        assert finished, "Never received download_finished SSE event"
+        assert any(
+            e.get("event") == "download_progress" and e.get("model") == MODEL_DOWNLOAD_ID
+            for e in sse_events
+        ), "No download_progress events received"
+
+        # Model should not appear in GET /models, but be available for completions
+        ids = _get_model_ids(is_reload=False)
+        assert MODEL_DOWNLOAD_ID not in ids, f"{MODEL_DOWNLOAD_ID} found in /models after download"
+
+        # Trigger the download again, should now fail
+        res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+        assert res.status_code == 400
+
+        res = server.make_request(
+            "POST",
+            "/v1/chat/completions",
+            data={
+                "model": MODEL_DOWNLOAD_ID,
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tokens": 4,
+            },
+        )
+        assert res.status_code == 200
     finally:
         os.remove(preset_path)
 

@@ -4685,10 +4685,10 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
     ).set_env(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS).set_preset_only());
 
     args.push_back(common_arg(
-        {"no-cache-models"}, "0|1",
-        "in server router mode, do not automatically add models from the cache directory to the model list",
+        {"hide-cache-models"}, "0|1",
+        "in server router mode, hide models from the cache directory from the model list",
         [](common_params &, const std::string &) { /* unused */ }
-    ).set_env(COMMON_ARG_PRESET_NO_CACHE_MODELS).set_preset_only());
+    ).set_env(COMMON_ARG_PRESET_HIDE_CACHE_MODELS).set_preset_only());
 
     // args.push_back(common_arg(
     //     {"pin"},

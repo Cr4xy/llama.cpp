@@ -503,25 +503,21 @@ void server_models::notify_sse(const std::string & event, const std::string & mo
 
 void server_models::load_models() {
     // Phase 1: load presets from all sources - pure I/O, no lock needed
-    // 1. custom-path models from presets
-    common_preset global = {};
-    common_presets custom_presets = {};
-    if (!base_params.models_preset.empty()) {
-        custom_presets = ctx_preset.load_from_ini(base_params.models_preset, global);
-        SRV_INF("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
-    }
+    // 1. cached models
+    common_presets cached_models = ctx_preset.load_from_cache();
+    SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
     // 2. local models from --models-dir
     common_presets local_models;
     if (!base_params.models_dir.empty()) {
         local_models = ctx_preset.load_from_models_dir(base_params.models_dir);
         SRV_INF("Loaded %zu local model presets from %s\n", local_models.size(), base_params.models_dir.c_str());
     }
-    // 3. cached models
-    std::string val;
-    bool load_cached_models = !global.get_option(COMMON_ARG_PRESET_NO_CACHE_MODELS, val) || !common_arg_utils::is_truthy(val);
-    common_presets cached_models = load_cached_models ? ctx_preset.load_from_cache() : common_presets{};
-    if (load_cached_models) {
-        SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
+    // 3. custom-path models from presets
+    common_preset global = {};
+    common_presets custom_presets = {};
+    if (!base_params.models_preset.empty()) {
+        custom_presets = ctx_preset.load_from_ini(base_params.models_preset, global);
+        SRV_INF("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
     }
 
     // cascade, apply global preset first
@@ -561,6 +557,15 @@ void server_models::load_models() {
 
     // hide cache models whose resolved file is already used by a preset with dedup-cache-models enabled
     std::set<std::string> hidden_models;
+
+    std::string val;
+    bool hide_cache_models = global.get_option(COMMON_ARG_PRESET_HIDE_CACHE_MODELS, val) && common_arg_utils::is_truthy(val);
+    if (hide_cache_models) {
+        for (const auto & [name, preset] : cached_models) {
+            hidden_models.insert(name);
+        }
+    }
+
     {
         std::set<std::string> preset_paths;
         for (const auto & [name, preset] : custom_presets) {
